@@ -13,528 +13,416 @@ interface Card {
   attacks: Array<{
     name: string;
     cost: string[];
+    convertedEnergyCost: number;
     damage: string;
     text: string;
   }>;
-  weaknesses: Array<{
-    type: string;
-    value: string;
-  }>;
+  weaknesses: Array<{ type: string; value: string }>;
+  resistances: Array<{ type: string; value: string }>;
+  retreatCost: string[];
+  convertedRetreatCost: number;
   set: {
+    id: string;
     name: string;
     series: string;
+    printedTotal: number;
+    total: number;
+    legalities: Record<string, string>;
+    releaseDate: string;
+    updatedAt: string;
+    images: { symbol: string; logo: string };
   };
-  images: {
-    small: string;
-    large: string;
-  };
-  regulationMark?: string;
+  number: string;
+  artist: string;
+  rarity: string;
+  flavorText: string;
+  nationalPokedexNumbers: number[];
+  legalities: Record<string, string>;
+  images: { small: string; large: string };
   tcgplayer?: {
     url: string;
     updatedAt: string;
-    prices: {
-      holofoil?: {
-        low: number;
-        mid: number;
-        high: number;
-        market: number;
-        directLow: number;
-      };
-      normal?: {
-        low: number;
-        mid: number;
-        high: number;
-        market: number;
-        directLow: number;
-      };
-      reverseHolofoil?: {
-        low: number;
-        mid: number;
-        high: number;
-        market: number;
-        directLow: number;
-      };
-    };
+    prices?: Record<string, {
+      low?: number;
+      mid?: number;
+      high?: number;
+      market?: number;
+      directLow?: number;
+    }>;
   };
   cardmarket?: {
     url: string;
     updatedAt: string;
-    prices: {
-      averageSellPrice: number;
-      lowPrice: number;
-      trendPrice: number;
-      germanProLow: number;
-      suggestedPrice: number;
-      reverseHoloSell: number;
-      reverseHoloLow: number;
-      reverseHoloTrend: number;
-      lowPriceExPlus: number;
-      avg1: number;
-      avg7: number;
-      avg30: number;
-      reverseHoloAvg1: number;
-      reverseHoloAvg7: number;
-      reverseHoloAvg30: number;
+    prices?: {
+      averageSellPrice?: number;
+      lowPrice?: number;
+      trendPrice?: number;
+      germanProLow?: number;
+      suggestedPrice?: number;
+      reverseHoloSell?: number;
+      reverseHoloLow?: number;
+      reverseHoloTrend?: number;
+      lowPriceExPlus?: number;
+      avg1?: number;
+      avg7?: number;
+      avg30?: number;
+      reverseHoloAvg1?: number;
+      reverseHoloAvg7?: number;
+      reverseHoloAvg30?: number;
     };
   };
 }
 
-interface PtcgResponse {
-  data: Card[];
-  page: number;
-  pageSize: number;
-  count: number;
-  totalCount: number;
+interface SearchCardsParams {
+  name?: string;
+  types?: string;
+  subtypes?: string;
+  legalities?: string;
+  hp?: string;
+  retreatCost?: string;
+  pageSize?: number;
 }
 
-// Standardized field descriptions
-const FIELD_DESCRIPTIONS = {
-  EXACT_MATCH:
-    'Use ! for exact matching (e.g., "!value" to match only exact value).',
-  RANGE_INCLUSIVE:
-    'Use [ and ] for inclusive ranges (e.g., [1 TO 3] for values 1-3).',
-  RANGE_EXCLUSIVE:
-    'Use { and } for exclusive ranges (e.g., {1 TO 3} for values more than 1 and less than 3).',
-  RANGE_UNBOUNDED:
-    'Use * for unbounded ranges (e.g., [* TO 100] for values up to 100, or [100 TO *] for values 100 or higher).',
-  NEGATIVE_FILTER:
-    'Use negative values with a "-" prefix to exclude values (e.g., ["-value"] to exclude value).',
-  MULTIPLE_VALUES:
-    'For multiple values, use an array (e.g., ["value1", "value2"]).',
-  EXTRACT_EXPLICIT:
-    'IMPORTANT: Only extract values that are explicitly specified in the query. Do not infer or guess values. Do not provide default values. If a value is not explicitly mentioned, omit the field entirely. Do not try to be systematic or methodical - just query exactly what was asked for.',
-  NO_INFERENCE:
-    'CRITICAL: Never infer or guess values. Never provide default values. Never make assumptions about what the user might want. Never try to be systematic or methodical. Never try to find "specific examples". Just query exactly what was asked for, nothing more and nothing less.',
-  DIRECT_QUERY:
-    'CRITICAL: Query exactly what was asked for. Do not try to be systematic. Do not try to find specific examples. Do not try to be methodical. Just make the exact query requested.',
-  EXCLUDE_SUBTYPES:
-    'Exclude all possible subtypes that are detected from the query in this field.',
-  PRESERVE_HYPHEN:
-    'IMPORTANT: For hyphenated names like "chien-pao", you MUST preserve the hyphen exactly as it appears.',
-  WILDCARD_MATCH:
-    'Use * for wildcard matching (e.g., "char*" to match all cards starting with "char", or "char*der" to match cards starting with "char" and ending with "der").',
-  NESTED_FIELD:
-    'Use dot notation (.) to search nested fields (e.g., "set.id:sm1" for set ID, "attacks.name:Spelunk" for attack names).',
-} as const;
+// In-memory collection store (persists for the lifetime of the server process)
+const userCollection: Map<string, { card: Card; quantity: number; notes?: string }> = new Map();
 
-// Reusable description components
-const DESCRIPTION_COMPONENTS = {
-  NUMERICAL: `${FIELD_DESCRIPTIONS.EXACT_MATCH} ${FIELD_DESCRIPTIONS.RANGE_INCLUSIVE} ${FIELD_DESCRIPTIONS.RANGE_EXCLUSIVE} ${FIELD_DESCRIPTIONS.RANGE_UNBOUNDED}`,
-  FILTERABLE: `${FIELD_DESCRIPTIONS.NEGATIVE_FILTER} ${FIELD_DESCRIPTIONS.EXACT_MATCH}`,
-  NESTED: `${FIELD_DESCRIPTIONS.NESTED_FIELD}`,
-  STRICT_EXTRACT: `${FIELD_DESCRIPTIONS.EXTRACT_EXPLICIT} ${FIELD_DESCRIPTIONS.NO_INFERENCE} ${FIELD_DESCRIPTIONS.DIRECT_QUERY}`,
-} as const;
+async function searchCards(params: SearchCardsParams): Promise<Card[]> {
+  const queryParts: string[] = [];
+  if (params.name) queryParts.push(`name:${params.name}`);
+  if (params.types) queryParts.push(`types:${params.types}`);
+  if (params.subtypes) queryParts.push(`subtypes:${params.subtypes}`);
+  if (params.legalities) queryParts.push(`legalities.${params.legalities}`);
+  if (params.hp) queryParts.push(`hp:${params.hp}`);
+  if (params.retreatCost) queryParts.push(`convertedRetreatCost:${params.retreatCost}`);
 
-// Field-specific descriptions
-const FIELD_DESCRIPTIONS_SPECIFIC = {
-  NAME: `${FIELD_DESCRIPTIONS.NO_INFERENCE} ${FIELD_DESCRIPTIONS.DIRECT_QUERY} ${FIELD_DESCRIPTIONS.PRESERVE_HYPHEN} For example, "chien-pao ex" should have name "chien-pao" (with the hyphen) and subtypes ["EX"]. Never remove or modify hyphens in the name. ${FIELD_DESCRIPTIONS.WILDCARD_MATCH} ${FIELD_DESCRIPTIONS.EXACT_MATCH} IMPORTANT: If no name is explicitly provided in the query, do not include a name field at all.`,
+  const query = queryParts.join(' ');
+  const pageSize = params.pageSize || 10;
 
-  SUBTYPES: `${FIELD_DESCRIPTIONS.NO_INFERENCE} ${FIELD_DESCRIPTIONS.DIRECT_QUERY} For example, "chien pao ex" should have name "chien pao" and subtypes ["EX"]. If multiple subtypes are present like "basic pikachu ex", use ["Basic", "EX"]. ${DESCRIPTION_COMPONENTS.FILTERABLE} If no subtypes are explicitly mentioned in the query, omit this field entirely.`,
+  const url = `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(query)}&pageSize=${pageSize}`;
+  const response = await fetch(url);
+  const data = await response.json() as { data: Card[] };
+  return data.data || [];
+}
 
-  LEGALITIES: `${FIELD_DESCRIPTIONS.NO_INFERENCE} ${FIELD_DESCRIPTIONS.DIRECT_QUERY} The legalities for a given card. For each legality passed in, the value is "legal" without quotes. ${DESCRIPTION_COMPONENTS.FILTERABLE} ${DESCRIPTION_COMPONENTS.NESTED} For example, "legalities.standard:banned" to find cards banned in Standard. If no legalities are explicitly mentioned, omit this field entirely.`,
-
-  CONVERTED_RETREAT_COST: `${FIELD_DESCRIPTIONS.NO_INFERENCE} ${FIELD_DESCRIPTIONS.DIRECT_QUERY} The converted retreat cost for a given Pokemon card. If no converted retreat cost is explicitly mentioned, omit this field. If the user explicitly specifies "free retreat", set this to 0. ${DESCRIPTION_COMPONENTS.NUMERICAL}`,
-
-  HP: `${FIELD_DESCRIPTIONS.NO_INFERENCE} The HP (Hit Points) of the Pokemon card. ${DESCRIPTION_COMPONENTS.NUMERICAL} If no HP is explicitly mentioned, omit this field entirely.`,
-
-  NATIONAL_POKEDEX_NUMBERS: `${FIELD_DESCRIPTIONS.NO_INFERENCE} The National Pokedex numbers of the Pokemon. ${DESCRIPTION_COMPONENTS.NUMERICAL} If no Pokedex numbers are explicitly mentioned, omit this field entirely.`,
-
-  PAGE: `${FIELD_DESCRIPTIONS.NO_INFERENCE} The page number for pagination. ${DESCRIPTION_COMPONENTS.NUMERICAL} If no page is explicitly mentioned, omit this field entirely.`,
-
-  PAGE_SIZE: `${FIELD_DESCRIPTIONS.NO_INFERENCE} The number of cards per page. ${DESCRIPTION_COMPONENTS.NUMERICAL} If no page size is explicitly mentioned, omit this field entirely.`,
-
-  TYPES: `${FIELD_DESCRIPTIONS.NO_INFERENCE} The types of the Pokemon card (e.g., ["Grass", "Psychic"]). ${DESCRIPTION_COMPONENTS.FILTERABLE} If no types are explicitly mentioned, omit this field entirely.`,
-
-  EVOLVES_TO: `${FIELD_DESCRIPTIONS.NO_INFERENCE} The Pokemon this card evolves into. ${DESCRIPTION_COMPONENTS.FILTERABLE} If no evolution information is explicitly mentioned, omit this field entirely.`,
-
-  SET: `${FIELD_DESCRIPTIONS.NO_INFERENCE} The set information for this card. ${DESCRIPTION_COMPONENTS.NESTED} For example, "set.id:sm1" to find cards from a specific set. If no set information is explicitly mentioned, omit this field entirely.`,
-
-  ATTACKS: `${FIELD_DESCRIPTIONS.NO_INFERENCE} The attacks available to this Pokemon card. ${DESCRIPTION_COMPONENTS.NESTED} For example, "attacks.name:Spelunk" to find cards with a specific attack name. If no attack information is explicitly mentioned, omit this field entirely.`,
-
-  WEAKNESSES: `${FIELD_DESCRIPTIONS.NO_INFERENCE} The weaknesses of this Pokemon card. ${DESCRIPTION_COMPONENTS.FILTERABLE} ${DESCRIPTION_COMPONENTS.NESTED} For example, "weaknesses.type:Water" to find cards weak to Water. If no weakness information is explicitly mentioned, omit this field entirely.`,
-
-  PRICE_LOOKUP: `${FIELD_DESCRIPTIONS.NO_INFERENCE} Look up the current market price for a specific card. Returns both TCGPlayer and Cardmarket prices if available. If no price information is explicitly requested, omit this field entirely.`,
-
-  REGULATION_MARK: `${FIELD_DESCRIPTIONS.NO_INFERENCE} The regulation mark (also known as "block") of the card (e.g., "F", "G", "H"). This indicates which regulation block the card belongs to. ${DESCRIPTION_COMPONENTS.FILTERABLE} If no regulation mark is explicitly mentioned, omit this field entirely.`,
-} as const;
-
-// Create an MCP server
-const server = new McpServer(
-  {
-    name: 'ptcg mcp server',
-    version: '1.0.0',
-  },
-  {
-    capabilities: {
-      resources: {},
-      tools: {},
-    },
+function formatCard(card: Card): string {
+  const lines: string[] = [
+    `**${card.name}** (${card.id})`,
+    `Type: ${card.supertype} | Subtypes: ${(card.subtypes || []).join(', ')}`,
+    `HP: ${card.hp || 'N/A'} | Types: ${(card.types || []).join(', ')}`,
+    `Set: ${card.set?.name} (${card.set?.series}) | Rarity: ${card.rarity || 'N/A'}`,
+  ];
+  if (card.attacks && card.attacks.length > 0) {
+    lines.push('Attacks:');
+    card.attacks.forEach(a => {
+      lines.push(`  - ${a.name} [${(a.cost || []).join(',')}] ${a.damage || ''}: ${a.text || ''}`);
+    });
   }
-);
+  if (card.legalities) {
+    const legs = Object.entries(card.legalities).map(([k, v]) => `${k}: ${v}`).join(', ');
+    lines.push(`Legalities: ${legs}`);
+  }
+  lines.push(`Image: ${card.images?.small || 'N/A'}`);
+  return lines.join('\n');
+}
 
-server.tool(
-  'pokemon-card-search',
-  'Searches for Pokemon cards',
-  {
-    name: z.string().optional().describe(FIELD_DESCRIPTIONS_SPECIFIC.NAME),
-    subtypes: z
-      .array(
-        z.enum([
-          'BREAK',
-          'Baby',
-          'Basic',
-          'EX',
-          'GX',
-          'Goldenrod Game Corner',
-          'Item',
-          'LEGEND',
-          'Level-Up',
-          'MEGA',
-          'Pokémon Tool',
-          'Pokémon Tool F',
-          'Rapid Strike',
-          'Restored',
-          "Rocket's Secret Machine",
-          'Single Strike',
-          'Special',
-          'Stadium',
-          'Stage 1',
-          'Stage 2',
-          'Supporter',
-          'TAG TEAM',
-          'Technical Machine',
-          'V',
-          'VMAX',
-          'VSTAR',
-          'Tera',
-        ])
-      )
-      .optional()
-      .describe(FIELD_DESCRIPTIONS_SPECIFIC.SUBTYPES),
-    legalities: z
-      .object({
-        standard: z.enum(['legal', 'banned']).optional(),
-        expanded: z.enum(['legal', 'banned']).optional(),
-        unlimited: z.enum(['legal', 'banned']).optional(),
-      })
-      .optional()
-      .describe(FIELD_DESCRIPTIONS_SPECIFIC.LEGALITIES),
-    convertedRetreatCost: z
-      .number()
-      .optional()
-      .describe(FIELD_DESCRIPTIONS_SPECIFIC.CONVERTED_RETREAT_COST),
-    hp: z.string().optional().describe(FIELD_DESCRIPTIONS_SPECIFIC.HP),
-    nationalPokedexNumbers: z
-      .string()
-      .optional()
-      .describe(FIELD_DESCRIPTIONS_SPECIFIC.NATIONAL_POKEDEX_NUMBERS),
-    page: z.number().optional().describe(FIELD_DESCRIPTIONS_SPECIFIC.PAGE),
-    pageSize: z
-      .number()
-      .optional()
-      .describe(FIELD_DESCRIPTIONS_SPECIFIC.PAGE_SIZE),
-    types: z
-      .array(z.string())
-      .optional()
-      .describe(FIELD_DESCRIPTIONS_SPECIFIC.TYPES),
-    evolvesTo: z
-      .array(z.string())
-      .optional()
-      .describe(FIELD_DESCRIPTIONS_SPECIFIC.EVOLVES_TO),
-    attacks: z
-      .array(
-        z.object({
-          name: z.string(),
-          cost: z.array(z.string()),
-          damage: z.string(),
-          text: z.string(),
-        })
-      )
-      .optional()
-      .describe(FIELD_DESCRIPTIONS_SPECIFIC.ATTACKS),
-    weaknesses: z
-      .array(
-        z.object({
-          type: z.string(),
-          value: z.string(),
-        })
-      )
-      .optional()
-      .describe(FIELD_DESCRIPTIONS_SPECIFIC.WEAKNESSES),
-    set: z
-      .object({
-        name: z.string(),
-        series: z.string(),
-      })
-      .optional()
-      .describe(FIELD_DESCRIPTIONS_SPECIFIC.SET),
-    regulationMark: z
-      .string()
-      .optional()
-      .describe(FIELD_DESCRIPTIONS_SPECIFIC.REGULATION_MARK),
-  },
-  async ({
-    name,
-    subtypes,
-    legalities,
-    convertedRetreatCost,
-    hp,
-    types,
-    evolvesTo,
-    attacks,
-    weaknesses,
-    set,
-    nationalPokedexNumbers,
-    page,
-    pageSize,
-    regulationMark,
-  }) => {
-    // Split types into positive and negative filters
-    const positiveTypes = types?.filter(t => !t.startsWith('-')) || [];
-    const negativeTypes =
-      types?.filter(t => t.startsWith('-')).map(t => t.slice(1)) || [];
+function formatPrice(card: Card): string {
+  const lines: string[] = [`**${card.name}** (${card.id}) — ${card.set?.name}`];
 
-    let query = buildQuery(
-      name,
-      subtypes,
-      legalities,
-      hp,
-      positiveTypes,
-      evolvesTo,
-      convertedRetreatCost,
-      nationalPokedexNumbers,
-      page,
-      pageSize,
-      set,
-      attacks,
-      weaknesses,
-      regulationMark
-    );
-
-    // Add negative type filters
-    if (negativeTypes.length > 0) {
-      const negativeQuery = buildQuery(
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        negativeTypes,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined
-      );
-      query = `${query} ${negativeQuery}`;
+  if (card.tcgplayer?.prices) {
+    lines.push('TCGPlayer Prices:');
+    for (const [variant, p] of Object.entries(card.tcgplayer.prices)) {
+      const parts: string[] = [];
+      if (p.low != null) parts.push(`Low: $${p.low.toFixed(2)}`);
+      if (p.mid != null) parts.push(`Mid: $${p.mid.toFixed(2)}`);
+      if (p.market != null) parts.push(`Market: $${p.market.toFixed(2)}`);
+      if (p.high != null) parts.push(`High: $${p.high.toFixed(2)}`);
+      if (parts.length) lines.push(`  ${variant}: ${parts.join(' | ')}`);
     }
+    lines.push(`  Updated: ${card.tcgplayer.updatedAt}`);
+    lines.push(`  Buy: ${card.tcgplayer.url}`);
+  } else {
+    lines.push('TCGPlayer: No price data available');
+  }
 
-    const result = await ptcg_search(query);
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(result),
-        },
-      ],
-    };
+  if (card.cardmarket?.prices) {
+    const cm = card.cardmarket.prices;
+    lines.push('Cardmarket Prices (EUR):');
+    if (cm.averageSellPrice != null) lines.push(`  Avg Sell: €${cm.averageSellPrice.toFixed(2)}`);
+    if (cm.trendPrice != null) lines.push(`  Trend: €${cm.trendPrice.toFixed(2)}`);
+    if (cm.lowPrice != null) lines.push(`  Low: €${cm.lowPrice.toFixed(2)}`);
+    if (cm.avg30 != null) lines.push(`  30-day Avg: €${cm.avg30.toFixed(2)}`);
+    lines.push(`  Updated: ${card.cardmarket.updatedAt}`);
+  }
+
+  return lines.join('\n');
+}
+
+const server = new McpServer({
+  name: 'ptcg-mcp',
+  version: '2.0.0',
+});
+
+// ─── ORIGINAL TOOLS ──────────────────────────────────────────────────────────
+
+server.tool(
+  'search_cards',
+  'Search for Pokemon TCG cards by name, type, subtype, legality, HP, and retreat cost.',
+  {
+    name: z.string().optional().describe('Card name (supports wildcards like char*)'),
+    types: z.string().optional().describe('Energy type (e.g. Water, Fire, Grass)'),
+    subtypes: z.string().optional().describe('Card subtype (e.g. Basic, EX, GX, V, VMAX)'),
+    legalities: z.string().optional().describe('Format legality e.g. standard:legal, expanded:banned'),
+    hp: z.string().optional().describe('HP filter e.g. [100 TO 200] or [* TO 100]'),
+    retreatCost: z.string().optional().describe('Converted retreat cost e.g. 0 for free retreat'),
+    pageSize: z.number().optional().describe('Number of results to return (default 10, max 250)'),
+  },
+  async (params) => {
+    try {
+      const cards = await searchCards(params);
+      if (!cards.length) return { content: [{ type: 'text', text: 'No cards found matching your criteria.' }] };
+      const formatted = cards.map(formatCard).join('\n\n---\n\n');
+      return { content: [{ type: 'text', text: `Found ${cards.length} card(s):\n\n${formatted}` }] };
+    } catch (e: unknown) {
+      return { content: [{ type: 'text', text: `Error searching cards: ${e instanceof Error ? e.message : String(e)}` }] };
+    }
   }
 );
 
 server.tool(
-  'pokemon-card-price',
-  'Look up the current market price for a Pokemon card',
-  {
-    name: z.string().describe(FIELD_DESCRIPTIONS_SPECIFIC.NAME),
-    set: z
-      .object({
-        name: z.string(),
-        series: z.string(),
-      })
-      .optional()
-      .describe(FIELD_DESCRIPTIONS_SPECIFIC.SET),
-  },
-  async ({ name, set }) => {
-    let query = buildQuery(
-      name,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      set,
-      undefined,
-      undefined
-    );
-    const result = await ptcg_search(query);
+  'get_card_details',
+  'Get full details for a specific card by its ID.',
+  { cardId: z.string().describe('The card ID e.g. xy1-1 or base1-4') },
+  async ({ cardId }) => {
+    try {
+      const url = `https://api.pokemontcg.io/v2/cards/${encodeURIComponent(cardId)}`;
+      const response = await fetch(url);
+      const data = await response.json() as { data: Card };
+      if (!data.data) return { content: [{ type: 'text', text: `Card ${cardId} not found.` }] };
+      return { content: [{ type: 'text', text: formatCard(data.data) }] };
+    } catch (e: unknown) {
+      return { content: [{ type: 'text', text: `Error fetching card: ${e instanceof Error ? e.message : String(e)}` }] };
+    }
+  }
+);
 
-    if (!result.data.length) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              error: 'No cards found matching the criteria',
-            }),
-          },
-        ],
+// ─── NEW TOOL 1: PRICE TRACKING ──────────────────────────────────────────────
+
+server.tool(
+  'get_card_prices',
+  'Get current market prices for a Pokemon TCG card from TCGPlayer and Cardmarket. Search by name to find pricing for all matching cards.',
+  {
+    name: z.string().describe('Card name to search for prices (e.g. Charizard, Pikachu VMAX)'),
+    setName: z.string().optional().describe('Narrow results to a specific set name'),
+    maxResults: z.number().optional().describe('Max cards to return prices for (default 5)'),
+  },
+  async ({ name, setName, maxResults = 5 }) => {
+    try {
+      const queryParts = [`name:${name}`];
+      if (setName) queryParts.push(`set.name:"${setName}"`);
+      const url = `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(queryParts.join(' '))}&pageSize=${maxResults}&orderBy=-set.releaseDate`;
+      const response = await fetch(url);
+      const data = await response.json() as { data: Card[] };
+      const cards = data.data || [];
+      if (!cards.length) return { content: [{ type: 'text', text: `No cards found for "${name}".` }] };
+      const formatted = cards.map(formatPrice).join('\n\n---\n\n');
+      return { content: [{ type: 'text', text: `Price data for "${name}" (${cards.length} result(s)):\n\n${formatted}` }] };
+    } catch (e: unknown) {
+      return { content: [{ type: 'text', text: `Error fetching prices: ${e instanceof Error ? e.message : String(e)}` }] };
+    }
+  }
+);
+
+// ─── NEW TOOL 2: DECK BUILDER ─────────────────────────────────────────────────
+
+server.tool(
+  'suggest_deck',
+  'Suggest a 60-card Pokemon TCG deck based on a strategy, type, or featured Pokemon. Returns a categorized list of recommended cards with rationale.',
+  {
+    strategy: z.string().describe('Deck strategy or theme e.g. "aggressive Charizard ex", "stall water", "turbo VMAX"'),
+    format: z.enum(['standard', 'expanded', 'unlimited']).optional().describe('Format legality (default: standard)'),
+    budget: z.enum(['budget', 'mid', 'competitive']).optional().describe('Budget tier: budget (<$50), mid ($50-150), competitive (any price)'),
+  },
+  async ({ strategy, format = 'standard', budget = 'competitive' }) => {
+    try {
+      // Extract type/pokemon hints from strategy
+      const typeKeywords: Record<string, string> = {
+        fire: 'Fire', water: 'Water', grass: 'Grass', lightning: 'Lightning',
+        psychic: 'Psychic', fighting: 'Fighting', darkness: 'Darkness', metal: 'Metal',
+        dragon: 'Dragon', colorless: 'Colorless', fairy: 'Fairy',
       };
+      const stratLower = strategy.toLowerCase();
+      let detectedType = '';
+      for (const [kw, type] of Object.entries(typeKeywords)) {
+        if (stratLower.includes(kw)) { detectedType = type; break; }
+      }
+
+      // Search for Pokemon matching the strategy
+      const pokemonQuery = detectedType
+        ? `supertype:Pokemon types:${detectedType} legalities.${format}:legal`
+        : `supertype:Pokemon legalities.${format}:legal`;
+
+      // Extract a possible featured pokemon name
+      const words = strategy.split(' ').filter(w => w.length > 3 && !['with','that','deck','turbo','stall','aggro'].includes(w.toLowerCase()));
+      const featuredName = words[0];
+
+      const [featuredRes, typeRes] = await Promise.all([
+        featuredName ? fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`name:${featuredName} supertype:Pokemon legalities.${format}:legal`)}&pageSize=6&orderBy=-set.releaseDate`).then(r => r.json() as Promise<{data:Card[]}>) : Promise.resolve({ data: [] as Card[] }),
+        fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(pokemonQuery)}&pageSize=12&orderBy=-set.releaseDate`).then(r => r.json() as Promise<{data:Card[]}>),
+      ]);
+
+      const featured = featuredRes.data || [];
+      const typeCards = typeRes.data || [];
+
+      // Filter by budget if needed (use market price from tcgplayer)
+      const budgetFilter = (card: Card) => {
+        if (budget === 'competitive') return true;
+        const market = card.tcgplayer?.prices?.holofoil?.market ?? card.tcgplayer?.prices?.normal?.market ?? 0;
+        if (budget === 'budget') return market < 5;
+        if (budget === 'mid') return market < 20;
+        return true;
+      };
+
+      const filteredFeatured = featured.filter(budgetFilter).slice(0, 4);
+      const filteredType = typeCards.filter(budgetFilter).filter(c => !filteredFeatured.find(f => f.id === c.id)).slice(0, 8);
+
+      const lines: string[] = [
+        `## Deck Suggestion: ${strategy}`,
+        `Format: ${format} | Budget: ${budget}\n`,
+        '### Featured Pokémon (4 copies recommended)',
+      ];
+
+      if (filteredFeatured.length) {
+        filteredFeatured.forEach(c => {
+          const price = c.tcgplayer?.prices?.holofoil?.market ?? c.tcgplayer?.prices?.normal?.market;
+          lines.push(`- ${c.name} (${c.set?.name}, ${c.id})${price ? ` — ~$${price.toFixed(2)}` : ''}`);
+        });
+      } else {
+        lines.push('- No featured Pokemon found for this strategy');
+      }
+
+      lines.push('\n### Supporting Pokémon (mix of 2-4 copies each)');
+      if (filteredType.length) {
+        filteredType.forEach(c => {
+          const price = c.tcgplayer?.prices?.holofoil?.market ?? c.tcgplayer?.prices?.normal?.market;
+          lines.push(`- ${c.name} (${c.set?.name})${price ? ` — ~$${price.toFixed(2)}` : ''}`);
+        });
+      } else {
+        lines.push('- No supporting Pokemon found');
+      }
+
+      lines.push('\n### Suggested Trainer/Energy Count (adjust to taste)');
+      lines.push('- Trainers: ~24 cards (draw support, search, switching)');
+      lines.push('- Energy: ~10-12 cards (matching type above)');
+      lines.push('\n### Tips');
+      lines.push(`- Run 4x Nest Ball or Ultra Ball to find your featured Pokemon quickly`);
+      lines.push(`- Add Professor's Research and Boss's Orders for draw and gust effects`);
+      lines.push(`- Use "search_cards" to find specific trainers and energy cards`);
+      lines.push(`- Use "get_card_prices" to check costs before buying`);
+
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
+    } catch (e: unknown) {
+      return { content: [{ type: 'text', text: `Error building deck: ${e instanceof Error ? e.message : String(e)}` }] };
     }
-
-    const card = result.data[0];
-    const priceInfo = {
-      name: card.name,
-      set: card.set.name,
-      tcgplayer: card.tcgplayer
-        ? {
-            url: card.tcgplayer.url,
-            updatedAt: card.tcgplayer.updatedAt,
-            prices: card.tcgplayer.prices,
-          }
-        : null,
-      cardmarket: card.cardmarket
-        ? {
-            url: card.cardmarket.url,
-            updatedAt: card.cardmarket.updatedAt,
-            prices: card.cardmarket.prices,
-          }
-        : null,
-    };
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(priceInfo),
-        },
-      ],
-    };
   }
 );
 
-function buildQuery(
-  name?: string,
-  subtypes?: string[],
-  legalities?:
-    | {
-        standard?: 'legal' | 'banned';
-        expanded?: 'legal' | 'banned';
-        unlimited?: 'legal' | 'banned';
-      }
-    | string,
-  hp?: string,
-  types?: string[],
-  evolvesTo?: string[],
-  convertedRetreatCost?: number,
-  nationalPokedexNumbers?: string,
-  page?: number | string,
-  pageSize?: number | string,
-  set?: { id?: string; name?: string; series?: string } | string,
-  attacks?:
-    | Array<{ name?: string; cost?: string[]; damage?: string; text?: string }>
-    | string,
-  weaknesses?: Array<{ type?: string; value?: string }> | string,
-  regulationMark?: string
-): string {
-  const parts: string[] = [];
+// ─── NEW TOOL 3: COLLECTION MANAGER ──────────────────────────────────────────
 
-  // Handle name with special cases
-  if (name) {
-    if (name.startsWith('!') || name.includes('*')) {
-      parts.push(`name:${name}`);
-    } else {
-      parts.push(`name:"${name}"`);
-    }
-  }
-
-  // Generic filter handler for arrays
-  function addFilter(
-    values: string[] | undefined,
-    field: string,
-    negative = false
-  ) {
-    if (!values?.length) return;
-
-    const query = values
-      .map(value => {
-        if (value.includes('.')) return value;
-        if (value.startsWith('!')) return `${field}:${value}`;
-        if (negative) return `-${field}:${value}`;
-        return `${field}:${value}`;
-      })
-      .join(' OR ');
-
-    parts.push(values.length === 1 ? query : `(${query})`);
-  }
-
-  // Generic nested filter handler
-  function addNestedFilter(value: string | object | undefined, field: string) {
-    if (!value) return;
-
-    if (typeof value === 'string') {
-      parts.push(value.includes('.') ? value : `${field}:${value}`);
-    } else {
-      Object.entries(value).forEach(([key, val]) => {
-        if (val !== undefined) {
-          parts.push(`${field}.${key}:${val}`);
+server.tool(
+  'manage_collection',
+  'Track your personal Pokemon TCG card collection. Add, remove, view, and value your cards. Collection persists for the duration of the server session.',
+  {
+    action: z.enum(['add', 'remove', 'view', 'value', 'search']).describe('Action: add a card, remove a card, view all cards, get total collection value, or search collection'),
+    cardId: z.string().optional().describe('Card ID required for add/remove actions (e.g. swsh4-25)'),
+    quantity: z.number().optional().describe('Number of copies (default 1) for add/remove'),
+    notes: z.string().optional().describe('Personal notes about the card (e.g. graded, foil, trade)'),
+    query: z.string().optional().describe('Search term for searching within your collection'),
+  },
+  async ({ action, cardId, quantity = 1, notes, query }) => {
+    try {
+      if (action === 'add') {
+        if (!cardId) return { content: [{ type: 'text', text: 'cardId is required for add action.' }] };
+        // Fetch card details
+        const res = await fetch(`https://api.pokemontcg.io/v2/cards/${encodeURIComponent(cardId)}`);
+        const data = await res.json() as { data: Card };
+        if (!data.data) return { content: [{ type: 'text', text: `Card ${cardId} not found.` }] };
+        const existing = userCollection.get(cardId);
+        if (existing) {
+          existing.quantity += quantity;
+          if (notes) existing.notes = notes;
+        } else {
+          userCollection.set(cardId, { card: data.data, quantity, notes });
         }
-      });
+        const entry = userCollection.get(cardId)!;
+        return { content: [{ type: 'text', text: `Added ${quantity}x ${data.data.name} to collection. You now have ${entry.quantity} copy/copies.` }] };
+      }
+
+      if (action === 'remove') {
+        if (!cardId) return { content: [{ type: 'text', text: 'cardId is required for remove action.' }] };
+        const existing = userCollection.get(cardId);
+        if (!existing) return { content: [{ type: 'text', text: `Card ${cardId} is not in your collection.` }] };
+        existing.quantity -= quantity;
+        if (existing.quantity <= 0) {
+          userCollection.delete(cardId);
+          return { content: [{ type: 'text', text: `Removed ${existing.card.name} from collection entirely.` }] };
+        }
+        return { content: [{ type: 'text', text: `Removed ${quantity} copy/copies. You now have ${existing.quantity} remaining.` }] };
+      }
+
+      if (action === 'view') {
+        if (!userCollection.size) return { content: [{ type: 'text', text: 'Your collection is empty. Use "add" to start tracking cards.' }] };
+        const lines = [`## Your Collection (${userCollection.size} unique cards)\n`];
+        for (const [id, entry] of userCollection) {
+          const price = entry.card.tcgplayer?.prices?.holofoil?.market ?? entry.card.tcgplayer?.prices?.normal?.market;
+          lines.push(`- ${entry.quantity}x **${entry.card.name}** (${id}) — ${entry.card.set?.name}${price ? ` | ~$${price.toFixed(2)} ea` : ''}${entry.notes ? ` | Note: ${entry.notes}` : ''}`);
+        }
+        return { content: [{ type: 'text', text: lines.join('\n') }] };
+      }
+
+      if (action === 'value') {
+        if (!userCollection.size) return { content: [{ type: 'text', text: 'Your collection is empty.' }] };
+        let totalValue = 0;
+        let priced = 0;
+        const lines = [`## Collection Value\n`];
+        for (const [id, entry] of userCollection) {
+          const price = entry.card.tcgplayer?.prices?.holofoil?.market ?? entry.card.tcgplayer?.prices?.normal?.market;
+          const cardTotal = price ? price * entry.quantity : 0;
+          if (price) { totalValue += cardTotal; priced++; }
+          lines.push(`- ${entry.quantity}x ${entry.card.name} (${id}): ${price ? `$${price.toFixed(2)} x${entry.quantity} = $${cardTotal.toFixed(2)}` : 'No price data'}`);
+        }
+        lines.push(`\n**Total estimated value: $${totalValue.toFixed(2)}** (based on ${priced}/${userCollection.size} cards with price data)`);
+        return { content: [{ type: 'text', text: lines.join('\n') }] };
+      }
+
+      if (action === 'search') {
+        if (!query) return { content: [{ type: 'text', text: 'query is required for search action.' }] };
+        const q = query.toLowerCase();
+        const results = [...userCollection.entries()].filter(([id, entry]) =>
+          entry.card.name.toLowerCase().includes(q) ||
+          id.toLowerCase().includes(q) ||
+          entry.card.set?.name.toLowerCase().includes(q) ||
+          (entry.notes?.toLowerCase().includes(q))
+        );
+        if (!results.length) return { content: [{ type: 'text', text: `No cards in your collection matching "${query}".` }] };
+        const lines = [`Found ${results.length} match(es) for "${query}":\n`];
+        results.forEach(([id, entry]) => {
+          lines.push(`- ${entry.quantity}x ${entry.card.name} (${id}) — ${entry.card.set?.name}${entry.notes ? ` | ${entry.notes}` : ''}`);
+        });
+        return { content: [{ type: 'text', text: lines.join('\n') }] };
+      }
+
+      return { content: [{ type: 'text', text: 'Unknown action.' }] };
+    } catch (e: unknown) {
+      return { content: [{ type: 'text', text: `Error managing collection: ${e instanceof Error ? e.message : String(e)}` }] };
     }
   }
+);
 
-  // Generic range filter handler
-  function addRangeFilter(value: string | number | undefined, field: string) {
-    if (!value) return;
+// ─── START SERVER ─────────────────────────────────────────────────────────────
 
-    const strValue = String(value);
-    if (
-      strValue.startsWith('[') ||
-      strValue.startsWith('{') ||
-      strValue.startsWith('!')
-    ) {
-      parts.push(`${field}:${strValue}`);
-    } else {
-      parts.push(`${field}:${value}`);
-    }
-  }
-
-  // Add all filters
-  addFilter(subtypes, 'subtypes');
-  addNestedFilter(legalities, 'legalities');
-  addFilter(types, 'types');
-  addFilter(evolvesTo, 'evolvesTo');
-
-  addRangeFilter(hp, 'hp');
-  addRangeFilter(convertedRetreatCost, 'convertedRetreatCost');
-  addRangeFilter(nationalPokedexNumbers, 'nationalPokedexNumbers');
-  addRangeFilter(page, 'page');
-  addRangeFilter(pageSize, 'pageSize');
-
-  addNestedFilter(set, 'set');
-  addNestedFilter(attacks, 'attacks');
-  addNestedFilter(weaknesses, 'weaknesses');
-
-  // Add regulation mark filter
-  if (regulationMark) {
-    parts.push(`regulationMark:${regulationMark}`);
-  }
-
-  return parts.join(' ');
+async function main() {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
 }
 
-async function ptcg_search(query: string): Promise<PtcgResponse> {
-  const response = await fetch(
-    `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(query)}`
-  );
-  return response.json() as Promise<PtcgResponse>;
-}
-
-// Start receiving messages on stdin and sending messages on stdout
-const transport = new StdioServerTransport();
-await server.connect(transport);
+main().catch(console.error);
